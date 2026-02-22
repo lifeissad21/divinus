@@ -7,6 +7,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { toast } from "sonner";
 import InboxCommandDialog from "./components/inbox-command-dialog";
 import InboxHeader from "./components/inbox-header";
 import InboxListPane from "./components/inbox-list-pane";
@@ -26,16 +27,19 @@ type InboxResponse = {
 };
 
 const THEME_CACHE_KEY = "gmail-ui-theme-v1";
+const INBOX_TOAST_ID = "inbox-refresh";
 
 export default function Home() {
   const [statusText, setStatusText] = useState("Connect Gmail accounts in Settings to load your inbox.");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [mailbox, setMailbox] = useState<InboxProfile | null>(null);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MessageDetail | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(true);
   const [theme, setTheme] = useState<UiTheme>("light");
+  const [inboxFilterQuery, setInboxFilterQuery] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const selectedRowRef = useRef<HTMLElement | null>(null);
   const selectedMessageIdRef = useRef<string | null>(null);
@@ -60,6 +64,7 @@ export default function Home() {
   const fetchMessageDetail = useCallback(async (params: { messageId: string; accountEmail: string; rowId?: string }) => {
     try {
       setDetailLoading(true);
+      setIsPreviewOpen(true);
       if (params.rowId) {
         setSelectedMessageId(params.rowId);
       }
@@ -82,6 +87,7 @@ export default function Home() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatusText(message);
+      toast.error(message);
     } finally {
       setDetailLoading(false);
     }
@@ -91,6 +97,7 @@ export default function Home() {
     try {
       setLoading(true);
       setStatusText("Loading inbox...");
+      toast.loading("Loading inbox...", { id: INBOX_TOAST_ID });
 
       const response = await fetch("/api/inbox?maxResults=25", {
         cache: "no-store",
@@ -108,7 +115,9 @@ export default function Home() {
       if (data.messages.length === 0) {
         setSelectedMessageId(null);
         setSelectedMessage(null);
-        setStatusText("No inbox messages found. Add accounts in Settings.");
+        const emptyMessage = "No inbox messages found. Add accounts in Settings.";
+        setStatusText(emptyMessage);
+        toast.info(emptyMessage, { id: INBOX_TOAST_ID });
         return;
       }
 
@@ -124,10 +133,13 @@ export default function Home() {
         });
       }
 
-      setStatusText("Inbox loaded.");
+      const loadedMessage = "Inbox loaded.";
+      setStatusText(loadedMessage);
+      toast.success(loadedMessage, { id: INBOX_TOAST_ID });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatusText(message);
+      toast.error(message, { id: INBOX_TOAST_ID });
     } finally {
       setLoading(false);
     }
@@ -153,6 +165,12 @@ export default function Home() {
 
       const target = event.target as HTMLElement | null;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsPreviewOpen(false);
         return;
       }
 
@@ -251,15 +269,21 @@ export default function Home() {
         statusText={statusText}
       />
 
-      <SidebarInset className={isLight ? "bg-[#f6f7f9]" : "bg-[#0f1115]"}>
-        <InboxHeader isLight={isLight} threadsTotal={mailbox?.threadsTotal} />
+      <SidebarInset className={`${isLight ? "bg-[#f6f7f9]" : "bg-[#0f1115]"} h-svh overflow-hidden`}>
+        <InboxHeader
+          isLight={isLight}
+          filterQuery={inboxFilterQuery}
+          onFilterQueryChange={setInboxFilterQuery}
+        />
 
-        <div className="flex flex-1 overflow-hidden px-2 pb-2">
+        <div className="flex min-h-0 flex-1 overflow-hidden px-0 pb-0">
           <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
-            <ResizablePanel defaultSize={64} minSize={38}>
+            <ResizablePanel defaultSize={isPreviewOpen ? 64 : 100} minSize={38} className="min-h-0 overflow-hidden">
               <InboxListPane
                 isLight={isLight}
+                loading={loading}
                 messages={messages}
+                globalFilter={inboxFilterQuery}
                 selectedMessageId={selectedMessageId}
                 selectedRowRef={selectedRowRef}
                 onSelectMessage={(rowId) => {
@@ -278,15 +302,20 @@ export default function Home() {
                 onOpenMessage={openMessageInNewWindow}
               />
             </ResizablePanel>
-            <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={36} minSize={24}>
-              <MessagePreviewPane
-                isLight={isLight}
-                detailLoading={detailLoading}
-                selectedMessage={selectedMessage}
-                onOpenMessage={openMessageInNewWindow}
-              />
-            </ResizablePanel>
+            {isPreviewOpen ? <ResizableHandle withHandle /> : null}
+            {isPreviewOpen ? (
+              <ResizablePanel defaultSize={36} minSize={24} className="min-h-0 overflow-hidden">
+                <MessagePreviewPane
+                  isLight={isLight}
+                  detailLoading={detailLoading}
+                  selectedMessage={selectedMessage}
+                  onOpenMessage={openMessageInNewWindow}
+                  onClosePreview={() => {
+                    setIsPreviewOpen(false);
+                  }}
+                />
+              </ResizablePanel>
+            ) : null}
           </ResizablePanelGroup>
         </div>
       </SidebarInset>
@@ -304,6 +333,9 @@ export default function Home() {
         }
         onRefreshInbox={() => {
           void fetchInboxFromApi();
+        }}
+        onSearchInbox={(query) => {
+          setInboxFilterQuery(query);
         }}
         onOpenMessage={openMessageInNewWindow}
         onSetTheme={setTheme}

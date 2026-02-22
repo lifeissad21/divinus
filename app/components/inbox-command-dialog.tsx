@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -17,6 +18,7 @@ type InboxCommandDialogProps = {
   onRefreshInbox: () => void;
   onOpenMessage: (params: { messageId: string; accountEmail: string }) => void;
   onSetTheme: (theme: UiTheme) => void;
+  onSearchInbox: (query: string) => void;
 };
 
 export default function InboxCommandDialog({
@@ -26,15 +28,31 @@ export default function InboxCommandDialog({
   onRefreshInbox,
   onOpenMessage,
   onSetTheme,
+  onSearchInbox,
 }: InboxCommandDialogProps) {
+  const [commandQuery, setCommandQuery] = useState("");
+
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Type a command or search..." />
+    <CommandDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        onOpenChange(nextOpen);
+        if (!nextOpen) {
+          setCommandQuery("");
+        }
+      }}
+    >
+      <CommandInput
+        value={commandQuery}
+        onValueChange={setCommandQuery}
+        placeholder="Type a command or search..."
+      />
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
         <CommandGroup heading="Inbox">
           <CommandItem
             onSelect={() => {
+              setCommandQuery("");
               onOpenChange(false);
               onRefreshInbox();
             }}
@@ -44,6 +62,7 @@ export default function InboxCommandDialog({
           </CommandItem>
           <CommandItem
             onSelect={() => {
+              setCommandQuery("");
               onOpenChange(false);
               if (selectedMessage) {
                 onOpenMessage(selectedMessage);
@@ -59,6 +78,7 @@ export default function InboxCommandDialog({
           <CommandItem
             onSelect={() => {
               onSetTheme("light");
+              setCommandQuery("");
               onOpenChange(false);
             }}
           >
@@ -68,6 +88,7 @@ export default function InboxCommandDialog({
           <CommandItem
             onSelect={() => {
               onSetTheme("dark");
+              setCommandQuery("");
               onOpenChange(false);
             }}
           >
@@ -75,6 +96,24 @@ export default function InboxCommandDialog({
             <CommandShortcut>🌙</CommandShortcut>
           </CommandItem>
         </CommandGroup>
+        {commandQuery.trim().length > 0 ? (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Search">
+              <CommandItem
+                value={`search inbox ${commandQuery}`}
+                onSelect={() => {
+                  onSearchInbox(commandQuery.trim());
+                  setCommandQuery("");
+                  onOpenChange(false);
+                }}
+              >
+                Search inbox for “{commandQuery.trim()}”
+                <CommandShortcut>↵</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+          </>
+        ) : null}
       </CommandList>
     </CommandDialog>
   );

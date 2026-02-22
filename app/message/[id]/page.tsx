@@ -32,15 +32,13 @@ export default function MessagePage() {
   const [message, setMessage] = useState<MessageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [theme] = useState<UiTheme>(() => {
-    if (typeof window === "undefined") {
-      return "light";
-    }
-
-    const cachedTheme = localStorage.getItem(THEME_CACHE_KEY);
-    return cachedTheme === "dark" ? "dark" : "light";
-  });
+  const [theme, setTheme] = useState<UiTheme>("light");
   const isLight = theme === "light";
+
+  useEffect(() => {
+    const cachedTheme = localStorage.getItem(THEME_CACHE_KEY);
+    setTheme(cachedTheme === "dark" ? "dark" : "light");
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");

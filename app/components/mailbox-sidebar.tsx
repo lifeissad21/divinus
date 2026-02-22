@@ -4,7 +4,6 @@ import {
   Inbox,
   Moon,
   Pencil,
-  Search,
   Send,
   Settings,
   SlidersHorizontal,
@@ -104,7 +103,6 @@ export default function MailboxSidebar({
             </DropdownMenuContent>
           </DropdownMenu>
           <div className="flex items-center gap-2">
-            <Search className={`h-4 w-4 ${isLight ? "text-zinc-600" : "text-zinc-400"}`} />
             <Pencil className={`h-4 w-4 ${isLight ? "text-zinc-600" : "text-zinc-400"}`} />
           </div>
         </div>
@@ -141,16 +139,6 @@ export default function MailboxSidebar({
             <SidebarMenuButton tooltip="Trash" className="h-9 rounded-md px-2 text-sm">
               <Trash2 className="h-4 w-4" />
               Trash
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Done" className="h-9 rounded-md px-2 text-sm">
-              Done
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Spam" className="h-9 rounded-md px-2 text-sm">
-              Spam
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
