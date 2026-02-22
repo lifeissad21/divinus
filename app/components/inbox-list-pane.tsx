@@ -1,5 +1,5 @@
 import type { MutableRefObject } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { flexRender, getCoreRowModel, getFilteredRowModel, useReactTable } from "@tanstack/react-table";
 import type { FilterFn } from "@tanstack/react-table";
@@ -155,6 +155,7 @@ type InboxListPaneProps = {
   selectedRowRef: MutableRefObject<HTMLElement | null>;
   onSelectMessage: (messageId: string) => void;
   onOpenMessage: (params: { messageId: string; accountEmail: string }) => void;
+  onMessageInViewport?: (message: InboxMessage) => void;
 };
 
 export default function InboxListPane({
@@ -166,8 +167,60 @@ export default function InboxListPane({
   selectedRowRef,
   onSelectMessage,
   onOpenMessage,
+  onMessageInViewport,
 }: InboxListPaneProps) {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const observedMessageIdsRef = useRef<Set<string>>(new Set());
+
+  const messagesById = useMemo(() => {
+    return new Map(messages.map((message) => [message.id, message]));
+  }, [messages]);
+
+  useEffect(() => {
+    observedMessageIdsRef.current.clear();
+  }, [messages]);
+
+  useEffect(() => {
+    if (!onMessageInViewport || !scrollContainerRef.current) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            continue;
+          }
+
+          const rowElement = entry.target as HTMLElement;
+          const messageId = rowElement.dataset.messageId;
+          if (!messageId || observedMessageIdsRef.current.has(messageId)) {
+            continue;
+          }
+
+          const message = messagesById.get(messageId);
+          if (message) {
+            observedMessageIdsRef.current.add(messageId);
+            onMessageInViewport(message);
+            observer.unobserve(rowElement);
+          }
+        }
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: "120px 0px",
+        threshold: 0.1,
+      }
+    );
+
+    observerRef.current = observer;
+    return () => {
+      observer.disconnect();
+      observerRef.current = null;
+    };
+  }, [messagesById, onMessageInViewport]);
 
   const globalFilterFn = useCallback<FilterFn<InboxMessage>>((row, _columnId, filterValue) => {
     const query = typeof filterValue === "string" ? filterValue.trim() : "";
@@ -299,7 +352,7 @@ export default function InboxListPane({
 
   return (
     <div className={`flex h-full min-h-0 flex-col overflow-hidden ${isLight ? "bg-[#f6f7f9]" : "bg-[#0f1115]"}`}>
-      <div className="min-h-0 flex-1 overflow-y-auto px-0.5 pb-0.5">
+      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto px-0.5 pb-0.5">
         {loading ? (
           <div className="space-y-1 py-1">
             {Array.from({ length: 8 }).map((_, index) => (
@@ -354,7 +407,14 @@ export default function InboxListPane({
                     <TableRow
                       key={row.id}
                       ref={(el) => {
-                        if (isSelected) selectedRowRef.current = el;
+                        if (isSelected) {
+                          selectedRowRef.current = el;
+                        }
+
+                        if (el && observerRef.current && onMessageInViewport) {
+                          el.dataset.messageId = message.id;
+                          observerRef.current.observe(el);
+                        }
                       }}
                       onClick={() => {
                         onSelectMessage(message.id);

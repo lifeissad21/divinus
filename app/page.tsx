@@ -17,7 +17,6 @@ import type {
   InboxMessage,
   InboxProfile,
   MessageDetail,
-  UiTheme,
 } from "./components/inbox-types";
 import MailboxSidebar from "./components/mailbox-sidebar";
 import MessagePreviewPane from "./components/message-preview-pane";
@@ -39,7 +38,6 @@ type InboxResponse = {
 const INBOX_TOAST_ID = "inbox-refresh";
 
 export default function Home() {
-  const [statusText, setStatusText] = useState("Connect Gmail accounts in Settings to load your inbox.");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [mailbox, setMailbox] = useState<InboxProfile | null>(null);
@@ -56,11 +54,21 @@ export default function Home() {
   const { resolvedTheme, setTheme } = useTheme();
   const selectedRowRef = useRef<HTMLElement | null>(null);
   const selectedMessageIdRef = useRef<string | null>(null);
+  const selectedMessageKeyRef = useRef<string | null>(null);
+  const hasFetchedInboxRef = useRef(false);
+  const messageDetailCacheRef = useRef<Map<string, MessageDetail>>(new Map());
+  const messageDetailInFlightRef = useRef<Map<string, Promise<MessageDetail | null>>>(new Map());
   const isLight = themeReady ? resolvedTheme !== "dark" : false;
 
   useEffect(() => {
     selectedMessageIdRef.current = selectedMessageId;
   }, [selectedMessageId]);
+
+  useEffect(() => {
+    selectedMessageKeyRef.current = selectedMessage
+      ? `${selectedMessage.accountEmail}:${selectedMessage.messageId}`
+      : null;
+  }, [selectedMessage]);
 
   useEffect(() => {
     setThemeReady(true);
@@ -74,14 +82,20 @@ export default function Home() {
     writeCustomInboxesToStorage(customInboxes);
   }, [customInboxes]);
 
-  const fetchMessageDetail = useCallback(async (params: { messageId: string; accountEmail: string; rowId?: string }) => {
-    try {
-      setDetailLoading(true);
-      setIsPreviewOpen(true);
-      if (params.rowId) {
-        setSelectedMessageId(params.rowId);
-      }
+  const loadMessageDetail = useCallback(async (params: { messageId: string; accountEmail: string }) => {
+    const cacheKey = `${params.accountEmail}:${params.messageId}`;
 
+    const cached = messageDetailCacheRef.current.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const inFlight = messageDetailInFlightRef.current.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const requestPromise = (async () => {
       const query = new URLSearchParams({
         messageId: params.messageId,
         accountEmail: params.accountEmail,
@@ -96,20 +110,46 @@ export default function Home() {
         throw new Error(data.error ?? "Failed to load message.");
       }
 
-      setSelectedMessage(data);
+      messageDetailCacheRef.current.set(cacheKey, data);
+      return data;
+    })();
+
+    messageDetailInFlightRef.current.set(cacheKey, requestPromise);
+
+    try {
+      return await requestPromise;
+    } finally {
+      messageDetailInFlightRef.current.delete(cacheKey);
+    }
+  }, []);
+
+  const fetchMessageDetail = useCallback(async (params: { messageId: string; accountEmail: string; rowId?: string }) => {
+    try {
+      setDetailLoading(true);
+      setIsPreviewOpen(true);
+      if (params.rowId) {
+        setSelectedMessageId(params.rowId);
+      }
+
+      const data = await loadMessageDetail({
+        messageId: params.messageId,
+        accountEmail: params.accountEmail,
+      });
+
+      if (data) {
+        setSelectedMessage(data);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatusText(message);
       toast.error(message);
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [loadMessageDetail]);
 
   const fetchInboxFromApi = useCallback(async () => {
     try {
       setLoading(true);
-      setStatusText("Loading inbox...");
       toast.loading("Loading inbox...", { id: INBOX_TOAST_ID });
 
       const response = await fetch("/api/inbox?maxResults=25", {
@@ -129,7 +169,6 @@ export default function Home() {
         setSelectedMessageId(null);
         setSelectedMessage(null);
         const emptyMessage = "No inbox messages found. Add accounts in Settings.";
-        setStatusText(emptyMessage);
         toast.info(emptyMessage, { id: INBOX_TOAST_ID });
         return;
       }
@@ -138,20 +177,24 @@ export default function Home() {
       const next = active ?? data.messages[0];
 
       if (next) {
-        setSelectedMessageId(next.id);
-        void fetchMessageDetail({
-          messageId: next.messageId,
-          accountEmail: next.accountEmail,
-          rowId: next.id,
-        });
+        const nextMessageKey = `${next.accountEmail}:${next.messageId}`;
+        const selectionChanged = next.id !== selectedMessageIdRef.current;
+        const detailChanged = selectedMessageKeyRef.current !== nextMessageKey;
+
+        if (selectionChanged || detailChanged) {
+          setSelectedMessageId(next.id);
+          void fetchMessageDetail({
+            messageId: next.messageId,
+            accountEmail: next.accountEmail,
+            rowId: next.id,
+          });
+        }
       }
 
       const loadedMessage = "Inbox loaded.";
-      setStatusText(loadedMessage);
       toast.success(loadedMessage, { id: INBOX_TOAST_ID });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatusText(message);
       toast.error(message, { id: INBOX_TOAST_ID });
     } finally {
       setLoading(false);
@@ -159,8 +202,25 @@ export default function Home() {
   }, [fetchMessageDetail]);
 
   useEffect(() => {
+    if (hasFetchedInboxRef.current) {
+      return;
+    }
+
+    hasFetchedInboxRef.current = true;
     void fetchInboxFromApi();
   }, [fetchInboxFromApi]);
+
+  const prefetchMessageDetail = useCallback((message: InboxMessage) => {
+    const messageKey = `${message.accountEmail}:${message.messageId}`;
+    if (selectedMessageKeyRef.current === messageKey) {
+      return;
+    }
+
+    void loadMessageDetail({
+      messageId: message.messageId,
+      accountEmail: message.accountEmail,
+    });
+  }, [loadMessageDetail]);
 
   const openMessageInNewWindow = useCallback((params: { messageId: string; accountEmail: string }) => {
     const query = new URLSearchParams({ accountEmail: params.accountEmail });
@@ -358,6 +418,10 @@ export default function Home() {
                     return;
                   }
 
+                  if (row.id === selectedMessageIdRef.current) {
+                    return;
+                  }
+
                   setSelectedMessageId(row.id);
                   void fetchMessageDetail({
                     messageId: row.messageId,
@@ -366,6 +430,7 @@ export default function Home() {
                   });
                 }}
                 onOpenMessage={openMessageInNewWindow}
+                onMessageInViewport={prefetchMessageDetail}
               />
             </ResizablePanel>
             {isPreviewOpen ? <ResizableHandle withHandle /> : null}

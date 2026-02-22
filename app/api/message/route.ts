@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ensureFreshAccessToken } from "@/lib/gmailAuth";
 import { getGmailAccountByEmail } from "@/lib/gmailStore";
+import { api } from "@/convex/_generated/api";
+import { getConvexServerClient } from "@/lib/convexServer";
 
 type GmailHeader = { name?: string; value?: string };
 type GmailPart = {
@@ -80,6 +82,34 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing messageId or accountEmail." }, { status: 400 });
   }
 
+  const convexClient = getConvexServerClient();
+  if (convexClient) {
+    try {
+      const cached = await convexClient.query(api.emailCache.getMessageDetail, {
+        accountEmail,
+        messageId,
+      });
+
+      if (cached?.body || cached?.bodyHtml || cached?.bodyText) {
+        return NextResponse.json({
+          id: cached.id,
+          messageId: cached.messageId,
+          accountEmail: cached.accountEmail,
+          from: cached.from,
+          subject: cached.subject,
+          date: cached.date,
+          preview: cached.preview,
+          bodyText: cached.bodyText ?? "",
+          bodyHtml: cached.bodyHtml ?? "",
+          body: cached.body ?? cached.bodyText ?? cached.preview,
+          source: "convex-cache",
+        });
+      }
+    } catch {
+      // Ignore cache read errors and continue with Gmail fetch.
+    }
+  }
+
   const account = getGmailAccountByEmail(accountEmail);
   if (!account) {
     return NextResponse.json({ error: "Account not found." }, { status: 404 });
@@ -99,17 +129,42 @@ export async function GET(request: Request) {
       : findPartByMime(message.payload?.parts, "text/plain");
     const bodyHtml = findPartByMime(message.payload?.parts, "text/html");
 
+    const parsedDate = date ? Date.parse(date) : Number.NaN;
+    const bodyTextTrimmed = bodyText.trim();
+    const bodyHtmlTrimmed = bodyHtml.trim();
+    const body = bodyTextTrimmed || message.snippet || "(No message body available)";
+
+    if (convexClient) {
+      try {
+        await convexClient.mutation(api.emailCache.upsertMessageDetail, {
+          accountEmail,
+          messageId,
+          from,
+          subject,
+          date,
+          preview: message.snippet ?? "",
+          bodyText: bodyTextTrimmed,
+          bodyHtml: bodyHtmlTrimmed,
+          body,
+          sortTime: Number.isFinite(parsedDate) ? parsedDate : Date.now(),
+        });
+      } catch {
+        // Ignore cache write errors to avoid blocking message responses.
+      }
+    }
+
     return NextResponse.json({
-      id: message.id ?? messageId,
+      id: message.id ?? `${accountEmail}:${messageId}`,
       messageId,
       accountEmail,
       from,
       subject,
       date,
       preview: message.snippet ?? "",
-      bodyText: bodyText.trim(),
-      bodyHtml: bodyHtml.trim(),
-      body: bodyText.trim() || message.snippet || "(No message body available)",
+      bodyText: bodyTextTrimmed,
+      bodyHtml: bodyHtmlTrimmed,
+      body,
+      source: "gmail-live",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected server error.";

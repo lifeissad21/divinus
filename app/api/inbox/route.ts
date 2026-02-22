@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ensureFreshAccessToken } from "@/lib/gmailAuth";
 import { getGmailAccounts } from "@/lib/gmailStore";
+import { api } from "@/convex/_generated/api";
+import { getConvexServerClient } from "@/lib/convexServer";
 
 type GmailHeader = { name?: string; value?: string };
 
@@ -55,6 +57,28 @@ async function gmailGet<T>(url: string, accessToken: string): Promise<T> {
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const maxResults = Math.min(Math.max(Number(requestUrl.searchParams.get("maxResults") ?? "20"), 1), 100);
+
+  const convexClient = getConvexServerClient();
+  if (convexClient) {
+    try {
+      const snapshot = await convexClient.query(api.emailCache.getInboxSnapshot, { maxResults });
+      if (snapshot.messages.length > 0) {
+        return NextResponse.json({
+          profile: {
+            emailAddress: "All accounts",
+            messagesTotal: snapshot.messages.length,
+            threadsTotal: snapshot.messages.length,
+          },
+          messages: snapshot.messages,
+          accounts: snapshot.accounts,
+          source: "convex-cache",
+        });
+      }
+    } catch {
+      // Ignore cache read errors and fall back to Gmail fetch.
+    }
+  }
+
   const accounts = getGmailAccounts();
 
   if (accounts.length === 0) {
@@ -124,6 +148,30 @@ export async function GET(request: Request) {
 
   merged.sort((a, b) => b.sortTime - a.sortTime);
 
+  if (convexClient) {
+    try {
+      await convexClient.mutation(api.emailCache.upsertInboxSnapshot, {
+        messages: merged.map((item) => ({
+          accountEmail: item.accountEmail,
+          messageId: item.messageId,
+          from: item.from,
+          subject: item.subject,
+          date: item.date,
+          preview: item.preview,
+          sortTime: item.sortTime,
+        })),
+        accounts: accountSummaries.map((account) => ({
+          id: account.id,
+          email: account.email,
+          messagesTotal: account.messagesTotal,
+          threadsTotal: account.threadsTotal,
+        })),
+      });
+    } catch {
+      // Ignore cache write errors to avoid blocking inbox responses.
+    }
+  }
+
   return NextResponse.json({
     profile: {
       emailAddress: "All accounts",
@@ -140,5 +188,6 @@ export async function GET(request: Request) {
       preview: item.preview,
     })),
     accounts: accountSummaries,
+    source: "gmail-live",
   });
 }
