@@ -2,11 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import { useTheme } from "next-themes";
 import MessageBody from "../../components/MessageBody";
-
-const THEME_CACHE_KEY = "gmail-ui-theme-v1";
-
-type UiTheme = "light" | "dark";
 
 type MessageDetail = {
   id: string;
@@ -32,17 +29,8 @@ export default function MessagePage() {
   const [message, setMessage] = useState<MessageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [theme, setTheme] = useState<UiTheme>("light");
-  const isLight = theme === "light";
-
-  useEffect(() => {
-    const cachedTheme = localStorage.getItem(THEME_CACHE_KEY);
-    setTheme(cachedTheme === "dark" ? "dark" : "light");
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme]);
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme !== "dark";
 
   useEffect(() => {
     if (missingParams) {

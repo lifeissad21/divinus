@@ -322,7 +322,7 @@ export default function InboxListPane({
         ) : messages.length === 0 ? (
           <div className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">No messages loaded.</div>
         ) : (
-          <div className={`overflow-hidden rounded-md border ${isLight ? "border-zinc-200/80 bg-white/50" : "border-zinc-800 bg-zinc-950/30"}`}>
+          <div className={`overflow-hidden rounded-md ${isLight ? "bg-white/50" : "bg-zinc-950/30"}`}>
             <Table className="table-fixed w-full">
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -8,6 +8,8 @@ import {
 } from "@/components/ui/resizable";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { toast } from "sonner";
+import { useTheme } from "next-themes";
+import CreateInboxDialog from "./components/create-inbox-dialog";
 import InboxCommandDialog from "./components/inbox-command-dialog";
 import InboxHeader from "./components/inbox-header";
 import InboxListPane from "./components/inbox-list-pane";
@@ -19,6 +21,14 @@ import type {
 } from "./components/inbox-types";
 import MailboxSidebar from "./components/mailbox-sidebar";
 import MessagePreviewPane from "./components/message-preview-pane";
+import {
+  doesMessageMatchCustomInbox,
+  getSenderSuggestions,
+  matchesAnyCustomInbox,
+  readCustomInboxesFromStorage,
+  writeCustomInboxesToStorage,
+  type CustomInbox,
+} from "@/lib/customInboxes";
 
 type InboxResponse = {
   profile: InboxProfile;
@@ -26,7 +36,6 @@ type InboxResponse = {
   error?: string;
 };
 
-const THEME_CACHE_KEY = "gmail-ui-theme-v1";
 const INBOX_TOAST_ID = "inbox-refresh";
 
 export default function Home() {
@@ -38,28 +47,32 @@ export default function Home() {
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MessageDetail | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(true);
-  const [theme, setTheme] = useState<UiTheme>("light");
   const [inboxFilterQuery, setInboxFilterQuery] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [createInboxOpen, setCreateInboxOpen] = useState(false);
+  const [customInboxes, setCustomInboxes] = useState<CustomInbox[]>([]);
+  const [activeInboxId, setActiveInboxId] = useState<string>("important");
+  const [themeReady, setThemeReady] = useState(false);
+  const { resolvedTheme, setTheme } = useTheme();
   const selectedRowRef = useRef<HTMLElement | null>(null);
   const selectedMessageIdRef = useRef<string | null>(null);
-  const isLight = theme === "light";
+  const isLight = themeReady ? resolvedTheme !== "dark" : false;
 
   useEffect(() => {
     selectedMessageIdRef.current = selectedMessageId;
   }, [selectedMessageId]);
 
   useEffect(() => {
-    const cachedTheme = localStorage.getItem(THEME_CACHE_KEY);
-    if (cachedTheme === "dark" || cachedTheme === "light") {
-      setTheme(cachedTheme);
-    }
+    setThemeReady(true);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(THEME_CACHE_KEY, theme);
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme]);
+    setCustomInboxes(readCustomInboxesFromStorage());
+  }, []);
+
+  useEffect(() => {
+    writeCustomInboxesToStorage(customInboxes);
+  }, [customInboxes]);
 
   const fetchMessageDetail = useCallback(async (params: { messageId: string; accountEmail: string; rowId?: string }) => {
     try {
@@ -153,6 +166,51 @@ export default function Home() {
     const query = new URLSearchParams({ accountEmail: params.accountEmail });
     window.open(`/message/${encodeURIComponent(params.messageId)}?${query.toString()}`, "_blank", "noopener,noreferrer");
   }, []);
+
+  const pinnedInboxes = useMemo(
+    () => customInboxes.filter((inbox) => inbox.pinned),
+    [customInboxes]
+  );
+
+  const senderSuggestions = useMemo(() => getSenderSuggestions(messages), [messages]);
+
+  const inboxMessages = useMemo(() => {
+    if (activeInboxId === "important") {
+      return messages;
+    }
+
+    if (activeInboxId === "other") {
+      return messages.filter((message) => !matchesAnyCustomInbox(message, customInboxes));
+    }
+
+    const customInbox = customInboxes.find((inbox) => inbox.id === activeInboxId);
+    if (!customInbox) {
+      return messages;
+    }
+
+    return messages.filter((message) => doesMessageMatchCustomInbox(message, customInbox));
+  }, [activeInboxId, customInboxes, messages]);
+
+  useEffect(() => {
+    if (inboxMessages.length === 0) {
+      setSelectedMessageId(null);
+      setSelectedMessage(null);
+      return;
+    }
+
+    const selectedStillVisible = inboxMessages.some((message) => message.id === selectedMessageIdRef.current);
+    if (selectedStillVisible) {
+      return;
+    }
+
+    const next = inboxMessages[0];
+    setSelectedMessageId(next.id);
+    void fetchMessageDetail({
+      messageId: next.messageId,
+      accountEmail: next.accountEmail,
+      rowId: next.id,
+    });
+  }, [fetchMessageDetail, inboxMessages]);
 
   const accountName = mailbox?.emailAddress?.split("@")[0] ?? "Accounts";
   const accountInitial = accountName.charAt(0).toUpperCase() || "A";
@@ -266,7 +324,9 @@ export default function Home() {
         authorizeVisible={false}
         signoutVisible={false}
         authorizeText="Settings"
-        statusText={statusText}
+        customInboxes={customInboxes}
+        activeInboxId={activeInboxId}
+        onSelectInbox={setActiveInboxId}
       />
 
       <SidebarInset className={`${isLight ? "bg-[#f6f7f9]" : "bg-[#0f1115]"} h-svh overflow-hidden`}>
@@ -274,20 +334,26 @@ export default function Home() {
           isLight={isLight}
           filterQuery={inboxFilterQuery}
           onFilterQueryChange={setInboxFilterQuery}
+          activeInboxId={activeInboxId}
+          pinnedInboxes={pinnedInboxes}
+          onSelectInbox={setActiveInboxId}
+          onCreateInbox={() => {
+            setCreateInboxOpen(true);
+          }}
         />
 
-        <div className="flex min-h-0 flex-1 overflow-hidden px-0 pb-0">
+        <div className={`flex min-h-0 flex-1 overflow-hidden border-t px-0 pb-0 ${isLight ? "border-zinc-200" : "border-zinc-800"}`}>
           <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
             <ResizablePanel defaultSize={isPreviewOpen ? 64 : 100} minSize={38} className="min-h-0 overflow-hidden">
               <InboxListPane
                 isLight={isLight}
                 loading={loading}
-                messages={messages}
+                messages={inboxMessages}
                 globalFilter={inboxFilterQuery}
                 selectedMessageId={selectedMessageId}
                 selectedRowRef={selectedRowRef}
                 onSelectMessage={(rowId) => {
-                  const row = messages.find((message) => message.id === rowId);
+                  const row = inboxMessages.find((message) => message.id === rowId);
                   if (!row) {
                     return;
                   }
@@ -339,6 +405,17 @@ export default function Home() {
         }}
         onOpenMessage={openMessageInNewWindow}
         onSetTheme={setTheme}
+      />
+
+      <CreateInboxDialog
+        open={createInboxOpen}
+        onOpenChange={setCreateInboxOpen}
+        senderSuggestions={senderSuggestions}
+        onCreateInbox={(inbox) => {
+          setCustomInboxes((current) => [inbox, ...current]);
+          setActiveInboxId(inbox.id);
+          toast.success(`Created inbox: ${inbox.name}`);
+        }}
       />
     </SidebarProvider>
   );
